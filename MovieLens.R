@@ -1,250 +1,279 @@
-# Install and load pacman package 
-if(!require(pacman)) install.packages("pacman", repos = "http://cran.us.r-project.org")
+# Load necessary packages if not already installed
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if (!require(glmnet)) install.packages("glmnet", repos = "http://cran.us.r-project.org")
 
-# Load required libraries using pacman
-pacman::p_load(tidyverse, ggplot2, ggthemes, data.table, lubridate, caret, 
-               knitr, scales, treemapify)
+# Load required libraries
+library(tidyverse)
+library(caret)
+library(glmnet)
 
-# Download the MovieLens dataset and read the ratings file
-dl <- tempfile()
-download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
 
-ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
-                 col.names = c("userId", "movieId", "rating", "timestamp"))
+options(timeout = 120)
 
-# Read the movies file and split it into columns
-movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+dl <- "ml-10M100K.zip"
+if(!file.exists(dl))
+  download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+# Define file paths for ratings and movies and unzip the dataset if necessary
+ratings_file <- "ml-10M100K/ratings.dat"
+if(!file.exists(ratings_file))
+  unzip(dl, ratings_file)
+
+movies_file <- "ml-10M100K/movies.dat"
+if(!file.exists(movies_file))
+  unzip(dl, movies_file)
+
+# Load ratings data
+ratings <- as.data.frame(str_split(read_lines(ratings_file), fixed("::"), simplify = TRUE),
+                         stringsAsFactors = FALSE)
+colnames(ratings) <- c("userId", "movieId", "rating", "timestamp")
+ratings <- ratings %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         rating = as.numeric(rating),
+         timestamp = as.integer(timestamp))
+
+# Load movies data
+movies <- as.data.frame(str_split(read_lines(movies_file), fixed("::"), simplify = TRUE),
+                        stringsAsFactors = FALSE)
 colnames(movies) <- c("movieId", "title", "genres")
-movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
-                                           title = as.character(title),
-                                           genres = as.character(genres))
+movies <- movies %>%
+  mutate(movieId = as.integer(movieId))
 
 # Merge ratings and movies data
 movielens <- left_join(ratings, movies, by = "movieId")
 
-# Create training and test sets
-set.seed(1, sample.kind = "Rounding")
+# Set seed for reproducibility
+set.seed(1, sample.kind="Rounding") 
+
+# Create a train-test split
 test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
 edx <- movielens[-test_index,]
 temp <- movielens[test_index,]
 
-# Ensure the test set only contains users and movies present in the training set
-validation <- temp %>% 
+# Create a final holdout test set
+final_holdout_test <- temp %>% 
   semi_join(edx, by = "movieId") %>%
   semi_join(edx, by = "userId")
 
-removed <- anti_join(temp, validation)
+# Update training set after creating the final holdout test set
+removed <- anti_join(temp, final_holdout_test)
 edx <- rbind(edx, removed)
 
-# Clean up temporary variables
+# Clean up unnecessary objects from the environment
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
-# Create training and test sets from the edx set
-set.seed(1, sample.kind = "Rounding")
-test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
-edx_train <- edx[-test_index,]
-edx_temp <- edx[test_index,]
 
-# Ensure the test set only contains users and movies present in the training set
-edx_test <- edx_temp %>%
-  semi_join(edx_train, by = "movieId") %>%
-  semi_join(edx_train, by = "userId")
+# Exploratory Data Analysis (EDA)
 
-removed <- anti_join(edx_temp, edx_test)
-edx_train <- rbind(edx_train, removed)
+# Summary statistics
+summary(edx)
+summary(final_holdout_test)
 
-# Clean up temporary variables
-rm(edx_temp, test_index, removed)
-
-# EDA for the edx dataset
-edx %>% as_tibble()
-glimpse(edx)
-
-# Summarize the edx dataset
-edx %>% summarize(unique_users = length(unique(userId)),
-                  unique_movies = length(unique(movieId)),
-                  unique_genres = length(unique(genres)))
-
-summary(edx$rating)
-
-# Plot the distribution of ratings
+# Distribution of ratings
 ggplot(edx, aes(x = rating)) +
-  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
-  labs(x = "Rating", y = "Count", title = "Distribution of Ratings")
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Ratings in Training Set",
+       x = "Rating",
+       y = "Count")
 
-# Calculate the number of ratings by year
-ratings_by_year <- edx %>% 
-  group_by(RatingYear) %>% 
-  summarise(Ratings_Count = n())
+ggplot(final_holdout_test, aes(x = rating)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Ratings in Test Set",
+       x = "Rating",
+       y = "Count")
 
-# Plot the number of ratings over time
-ggplot(ratings_by_year, aes(x = RatingYear, y = Ratings_Count)) +
-  geom_line(color = "blue") +
-  labs(x = "Rating Year", y = "Number of Ratings", title = "Number of Ratings Over Time") +
-  theme_minimal()
+# Number of ratings per user
+ratings_per_user <- edx %>%
+  group_by(userId) %>%
+  summarise(num_ratings = n())
 
-# Unique ratings
-unique_ratings <- unique(edx$rating)
-sort(unique_ratings)
-edx %>% group_by(rating) %>% summarize(ratings_sum = n()) %>%
-  arrange(desc(ratings_sum))
+ggplot(ratings_per_user, aes(x = num_ratings)) +
+  geom_histogram(fill = "skyblue", color = "black", bins = 30) +
+  labs(title = "Number of Ratings per User in Training Set",
+       x = "Number of Ratings",
+       y = "Count")
 
-# Proportion of ratings greater than or equal to 3
-rp <- edx %>% filter(edx$rating >= 3)
-nrow(rp) / length(edx$rating)
+# Number of ratings per movie
+ratings_per_movie <- edx %>%
+  group_by(movieId) %>%
+  summarise(num_ratings = n())
 
-# Convert timestamps to POSIXct and extract year
-edx <- edx %>% mutate(timestamp = as.POSIXct(timestamp, origin = "1970-01-01", tz = "EST"))
-edx$timestamp <- format(edx$timestamp, "%Y")
-names(edx)[names(edx) == "timestamp"] <- "RatingYear"
-head(edx)
+ggplot(ratings_per_movie, aes(x = num_ratings)) +
+  geom_histogram(fill = "skyblue", color = "black", bins = 30) +
+  labs(title = "Number of Ratings per Movie in Training Set",
+       x = "Number of Ratings",
+       y = "Count")
 
-# Repeat for validation and edx_train sets
-validation <- validation %>% mutate(timestamp = as.POSIXct(timestamp, origin = "1970-01-01", tz = "EST"))
-validation$timestamp <- format(validation$timestamp, "%Y")
-names(validation)[names(validation) == "timestamp"] <- "RatingYear"
-head(validation)
+# Convert timestamp to Date format
+edx <- edx %>%
+  mutate(timestamp = as.POSIXct(timestamp, origin = "1970-01-01"))
 
-edx_train <- edx_train %>% mutate(timestamp = as.POSIXct(timestamp, origin = "1970-01-01", tz = "EST"))
-edx_train$timestamp <- format(edx_train$timestamp, "%Y")
-names(edx_train)[names(edx_train) == "timestamp"] <- "RatingYear"
-head(edx_train)
+# Number of ratings over time
+ratings_over_time <- edx %>%
+  count(timestamp) %>%
+  ggplot(aes(x = timestamp, y = n)) +
+  geom_line(color = "skyblue") +
+  labs(title = "Number of Ratings Over Time",
+       x = "Timestamp",
+       y = "Number of Ratings")
 
-edx_test <- edx_test %>% mutate(timestamp = as.POSIXct(timestamp, origin = "1970-01-01", tz = "EST"))
-edx_test$timestamp <- format(edx_test$timestamp, "%Y")
-names(edx_test)[names(edx_test) == "timestamp"] <- "RatingYear"
-head(edx_test)
+ratings_over_time
 
-range(edx$RatingYear)
 
-# Convert RatingYear to numeric and check the structure
-edx$RatingYear <- as.numeric(edx$RatingYear)
-str(edx)
-
-# Summarize ratings by year and title
-edx %>% group_by(RatingYear, title) %>% 
-  summarize(Ratings_Sum = n(), Average_Rating = mean(rating)) %>%
-  mutate(Average_Rating = sprintf("%0.2f", Average_Rating)) %>%
-  arrange(-Ratings_Sum) %>% print(n = 50)
-
-# Separate genres into individual rows
-edx_genres <- edx %>% separate_rows(genres, sep = "\\|")
-
-# Summarize ratings by genre
-edx_genres %>% 
-  group_by(genres) %>% summarize(Ratings_Sum = n(), Average_Rating = mean(rating)) %>%
-  arrange(-Ratings_Sum)
-
-# Summarize ratings by genre and sort by average rating
-edx_genres %>%
-  group_by(genres) %>% summarize(Ratings_Sum = n(), Average_Rating = mean(rating)) %>%
-  arrange(-Average_Rating)
-
-# Convert genres to factors
-edx$genres <- as.factor(edx$genres)
-edx_genres$genres <- as.factor(edx_genres$genres)
-class(edx_genres$genres)
-
-# Extract release year from the title
-yearreleaseda <- as.numeric(str_sub(edx$title, start = -5, end = -2))
-edx <- edx %>% mutate(yearReleased = yearreleaseda)
-head(edx)
-
-# Repeat for validation, edx_train, and edx_test sets
-yearreleasedb <- as.numeric(str_sub(validation$title, start = -5, end = -2))
-validation <- validation %>% mutate(yearReleased = yearreleasedb)
-head(validation)
-
-yearreleasedc <- as.numeric(str_sub(edx_train$title, start = -5, end = -2))
-edx_train <- edx_train %>% mutate(yearReleased = yearreleasedc)
-head(edx_train)
-
-yearreleasedd <- as.numeric(str_sub(edx_test$title, start = -5, end = -2))
-edx_test <- edx_test %>% mutate(yearReleased = yearreleasedd)
-head(edx_test)
-
-# Calculate the age of the movie
-edx <- edx %>% mutate(MovieAge = 2020 - yearReleased)
-validation <- validation %>% mutate(MovieAge = 2020 - yearReleased)
-edx_train <- edx_train %>% mutate(MovieAge = 2020 - yearReleased)
-edx_test <- edx_test %>% mutate(MovieAge = 2020 - yearReleased)
-
-# Summary statistics of MovieAge
-summary(edx$MovieAge)
-
-# Function to calculate RMSE
-RMSE <- function(true_ratings, predicted_ratings){
-  sqrt(mean((true_ratings - predicted_ratings)^2))
+# Function to calculate NRMSE
+nrmse <- function(predicted, actual) {
+  rmse <- sqrt(mean((actual - predicted)^2))
+  (rmse - min(actual)) / (max(actual) - min(actual))
 }
 
+# Model Building and Evaluation
+
+# Baseline Model - Mean and Median
+mean_rating <- mean(edx$rating)
+median_rating <- median(edx$rating)
+mean_rating
+median_rating
+
 # Baseline model using mean rating
-edx_train_mu <- mean(edx_train$rating)
-NRMSE_M1 <- RMSE(edx_test$rating, edx_train_mu)
-results_table <- tibble(Model_Type = "NRMSE", RMSE = NRMSE_M1) %>% 
-  mutate(RMSE = sprintf("%0.4f", RMSE))
-results_table
+baseline_mean <- rep(mean_rating, nrow(final_holdout_test))
 
-# Model using median rating
-edx_train_median <- median(edx_train$rating)
-MM_M2 <- RMSE(edx_test$rating, edx_train_median)
-results_table <- tibble(Model_Type = c("NRMSE", "Median_Model"),
-                        RMSE = c(NRMSE_M1, MM_M2)) %>% 
-  mutate(RMSE = sprintf("%0.4f", RMSE))
-results_table
+# Baseline model using median rating
+baseline_median <- rep(median_rating, nrow(final_holdout_test))
 
-# Model with movie effects
-bi <- edx_train %>% group_by(movieId) %>%
-  summarize(b_i = mean(rating - edx_train_mu))
+# Calculate RMSE and NRMSE for baseline models
+rmse_baseline_mean <- sqrt(mean((final_holdout_test$rating - baseline_mean)^2))
+nrmse_baseline_mean <- nrmse(baseline_mean, final_holdout_test$rating)
 
-prediction_bi <- edx_train_mu + edx_test %>%
-  left_join(bi, by = "movieId") %>% .$b_i
-MEM_M3 <- RMSE(edx_test$rating, prediction_bi)
-results_table <- tibble(Model_Type = c("NRMSE", "Median_Model", "Movie Effects"),
-                        RMSE = c(NRMSE_M1, MM_M2, MEM_M3)) %>% 
-  mutate(RMSE = sprintf("%0.4f", RMSE))
-results_table
+rmse_baseline_median <- sqrt(mean((final_holdout_test$rating - baseline_median)^2))
+nrmse_baseline_median <- nrmse(baseline_median, final_holdout_test$rating)
 
-# Model with movie and user effects
-bu <- edx_train %>% left_join(bi, by = "movieId") %>%
+cat("Baseline Model - Mean:\n")
+cat("RMSE:", rmse_baseline_mean, "\n")
+cat("NRMSE:", nrmse_baseline_mean, "\n\n")
+
+cat("Baseline Model - Median:\n")
+cat("RMSE:", rmse_baseline_median, "\n")
+cat("NRMSE:", nrmse_baseline_median, "\n\n")
+
+##############
+
+# Movie Effects Model - Incorporating movie-specific biases (b_i)
+movie_mean_rating <- edx %>%
+  group_by(movieId) %>%
+  summarise(mean_rating = mean(rating))
+
+overall_mean_rating <- mean(edx$rating)
+
+movie_effects_model <- edx %>%
+  left_join(movie_mean_rating, by = "movieId") %>%
+  group_by(movieId) %>%
+  summarise(b_i = mean(mean_rating - overall_mean_rating))
+
+final_holdout_test_movie_effects <- final_holdout_test %>%
+  left_join(movie_effects_model, by = "movieId") %>%
+  mutate(b_i = ifelse(is.na(b_i), 0, b_i)) %>%
+  select(userId, movieId, rating, b_i)
+
+rmse_movie_effects <- sqrt(mean((final_holdout_test_movie_effects$rating - (mean(edx$rating) + final_holdout_test_movie_effects$b_i))^2))
+nrmse_movie_effects <- nrmse((mean(edx$rating) + final_holdout_test_movie_effects$b_i), final_holdout_test$rating)
+
+cat("Movie Effects Model:\n")
+cat("RMSE:", rmse_movie_effects, "\n")
+cat("NRMSE:", nrmse_movie_effects, "\n\n")
+
+# Calculate overall mean rating
+overall_mean_rating <- mean(edx$rating)
+
+# User Effects Model - Incorporating user-specific biases (b_u)
+# Calculate user-specific biases (b_u)
+user_mean_rating <- edx %>%
   group_by(userId) %>%
-  summarize(b_u = mean(rating - edx_train_mu - b_i))
+  summarise(mean_rating = mean(rating))
 
-prediction_bu <- edx_test %>% 
-  left_join(bi, by = "movieId") %>%
-  left_join(bu, by = "userId") %>%
-  mutate(pred = edx_train_mu + b_i + b_u) %>%
-  .$pred
-UEM_M4 <- RMSE(edx_test$rating, prediction_bu)
-results_table <- tibble(Model_Type = c("NRMSE", "Median_Model", "Movie Effects", "Movie and User Effects"),
-                        RMSE = c(NRMSE_M1, MM_M2, MEM_M3, UEM_M4)) %>% 
-  mutate(RMSE = sprintf("%0.4f", RMSE))
-results_table
-
-# Regularized movie and user effects model
-lambda <- 5
-bi_reg <- edx_train %>% group_by(movieId) %>%
-  summarize(b_i = sum(rating - edx_train_mu)/(n() + lambda), n_i = n())
-
-bu_reg <- edx_train %>% left_join(bi_reg, by = "movieId") %>%
+user_effects_model <- edx %>%
+  left_join(user_mean_rating, by = "userId") %>%
   group_by(userId) %>%
-  summarize(b_u = sum(rating - edx_train_mu - b_i)/(n() + lambda), n_u = n())
+  summarise(b_u = mean(mean_rating - overall_mean_rating))
 
-prediction_reg <- edx_test %>%
-  left_join(bi_reg, by = "movieId") %>%
-  left_join(bu_reg, by = "userId") %>%
-  mutate(pred = edx_train_mu + b_i + b_u) %>% .$pred
-UEM_M5 <- RMSE(edx_test$rating, prediction_reg)
-results_table <- tibble(Model_Type = c("NRMSE", "Median_Model", "Movie Effects", "Movie and User Effects", 
-                                       "Regularized Movie and User Effects"),
-                        RMSE = c(NRMSE_M1, MM_M2, MEM_M3, UEM_M4, UEM_M5)) %>% 
-  mutate(RMSE = sprintf("%0.4f", RMSE))
-results_table
+# Apply user-specific biases to the final holdout test set
+final_holdout_test_user_effects <- final_holdout_test %>%
+  left_join(user_effects_model, by = "userId") %>%
+  mutate(b_u = ifelse(is.na(b_u), 0, b_u)) %>%
+  select(userId, movieId, rating, b_u)
 
-# Display results in a table
-results_table %>% kable()
-results_table$RMSE <- as.numeric(results_table$RMSE)
-results_table$Model_Type <- as.factor(results_table$Model_Type)
-ggplot(results_table, aes(x = Model_Type, y = RMSE)) +
-  geom_bar(stat = "identity", fill = "Blue") +
-  ggtitle("RMSE results per Model") +
-  theme_hc()
+# Calculate RMSE and NRMSE for user effects model
+rmse_user_effects <- sqrt(mean((final_holdout_test_user_effects$rating - (overall_mean_rating + final_holdout_test_user_effects$b_u))^2))
+nrmse_user_effects <- rmse_user_effects / (max(final_holdout_test$rating) - min(final_holdout_test$rating))
+
+cat("User Effects Model:\n")
+cat("RMSE:", rmse_user_effects, "\n")
+cat("NRMSE:", nrmse_user_effects, "\n\n")
+
+# Movie Age Effects Model - Incorporating movie age effects (b_a)
+edx <- edx %>%
+  mutate(timestamp = as.Date(timestamp, origin = "1970-01-01"))
+
+movie_age_effects_model <- edx %>%
+  group_by(movieId) %>%
+  summarise(b_a = as.numeric(difftime(mean(timestamp), as.Date("1970-01-01"), units = "days")))
+
+final_holdout_test_movie_age_effects <- final_holdout_test %>%
+  left_join(movie_age_effects_model, by = "movieId") %>%
+  mutate(b_a = ifelse(is.na(b_a), 0, b_a)) %>%
+  select(userId, movieId, rating, b_a)
+
+rmse_movie_age_effects <- sqrt(mean((final_holdout_test_movie_age_effects$rating - (mean(edx$rating) + final_holdout_test_movie_age_effects$b_a))^2))
+nrmse_movie_age_effects <- nrmse((mean(edx$rating) + final_holdout_test_movie_age_effects$b_a), final_holdout_test$rating)
+
+cat("Movie Age Effects Model:\n")
+cat("RMSE:", rmse_movie_age_effects, "\n")
+cat("NRMSE:", nrmse_movie_age_effects, "\n\n")
+
+# Regularize movie and user effects
+
+# Calculate overall mean rating
+overall_mean_rating <- mean(edx$rating)
+
+# Calculate movie-specific biases (b_i)
+movie_effects_model <- edx %>%
+  group_by(movieId) %>%
+  summarise(b_i = mean(rating) - overall_mean_rating)
+
+# Calculate user-specific biases (b_u)
+user_effects_model <- edx %>%
+  group_by(userId) %>%
+  summarise(b_u = mean(rating) - overall_mean_rating)
+
+# Combine movie and user effects in the training set
+edx_with_effects <- edx %>%
+  left_join(movie_effects_model, by = "movieId") %>%
+  left_join(user_effects_model, by = "userId") %>%
+  mutate(predicted_rating = overall_mean_rating + b_i + b_u)
+
+# Handle missing values
+edx_with_effects <- edx_with_effects %>%
+  mutate(b_i = ifelse(is.na(b_i), 0, b_i),
+         b_u = ifelse(is.na(b_u), 0, b_u),
+         predicted_rating = ifelse(is.na(predicted_rating), overall_mean_rating, predicted_rating))
+
+# Apply movie and user effects to the final holdout test set
+final_holdout_test_with_effects <- final_holdout_test %>%
+  left_join(movie_effects_model, by = "movieId") %>%
+  left_join(user_effects_model, by = "userId") %>%
+  mutate(b_i = ifelse(is.na(b_i), 0, b_i),
+         b_u = ifelse(is.na(b_u), 0, b_u),
+         predicted_rating = overall_mean_rating + b_i + b_u)
+
+# Calculate RMSE and NRMSE for movie and user effects model
+rmse_movie_user_effects <- sqrt(mean((final_holdout_test_with_effects$rating - final_holdout_test_with_effects$predicted_rating)^2))
+nrmse_movie_user_effects <- rmse_movie_user_effects / (max(final_holdout_test$rating) - min(final_holdout_test$rating))
+
+cat("Movie and User Effects Model:\n")
+cat("RMSE:", rmse_movie_user_effects, "\n")
+cat("NRMSE:", nrmse_movie_user_effects, "\n\n")
+
