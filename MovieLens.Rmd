@@ -214,28 +214,6 @@ Normalized Root Mean Squared Error (NRMSE)
 
 Normalized Root Mean Squared Error (NRMSE) is a variation of RMSE that normalizes the error to the range of ratings, making it more interpretable across different datasets. NRMSE scales the RMSE to the range of the actual ratings, providing a percentage error relative to the span of the observed ratings. This makes NRMSE useful for comparing models across different datasets with varying rating scales.
 
-# Results 
-
-The results of the model evaluations are summarized as follows.
-
-Model Type	RMSE	NRMSE
-Baseline Model - Mean
-	1.061202	0.1247115
-Baseline Model - Median
-	1.168016	0.148448
-Movie Effects Model
-	0.9439087	0.09864637
-User Effects Model
-	0.978336	0.217408
-Movie Age Effects Model
-	1.197495	0. 266099
-Regularized Movie and User Effects Model
-	0.8850398	0.1966755
-
-The RMSE returned by testing the algorithm on the final_holdout_test set
-
-The best performing model, the Regularized Movie and User Effects Model, achieved an RMSE of 0.8850398 on the final holdout test set. This model combines the movie-specific and user-specific biases and applies regularization to achieve better performance.
-
 ```{r}
 # Model Building and Evaluation
 
@@ -386,9 +364,9 @@ cat("NRMSE:", nrmse_movie_user_effects, "\n\n")
 
 # Conclusion
 
-The evaluation results suggest that models incorporating both user and movie effects, along with movie age effects and regularization, tend to perform better in predicting movie ratings. The best-performing model achieved a validation RMSE of 0.86481, indicating its ability to make more accurate predictions compared to simpler baseline models. These findings underscore the importance of considering both user-specific preferences and movie characteristics when designing effective recommendation systems.
+The evaluation results suggest that models incorporating both user and movie effects, along with movie age effects and regularization, tend to perform better in predicting movie ratings. The best-performing model achieved a validation RMSE of 0.868537, indicating its ability to make more accurate predictions compared to simpler baseline models. These findings underscore the importance of considering both user-specific preferences and movie characteristics when designing effective recommendation systems.
 
-This project involved developing models to predict movie ratings using the MovieLens 10M dataset. After performing exploratory data analysis (EDA) and splitting the data into training and test sets, various models were built and evaluated. The best performance was achieved by the Regularized Movie and User Effects Model, which accurately incorporates both user and movie biases with regularization to prevent overfitting. The final RMSE of 0.9154 demonstrates the effectiveness of this approach in predicting movie ratings.
+This project involved developing models to predict movie ratings using the MovieLens 10M dataset. After performing exploratory data analysis (EDA) and splitting the data into training and test sets, various models were built and evaluated. The best performance was achieved by the Regularized Movie and User Effects Model, which accurately incorporates both user and movie biases with regularization to prevent overfitting. The final RMSE of 0.868537 demonstrates the effectiveness of this approach in predicting movie ratings.
 
 Overall, this project provides valuable insights into the factors influencing movie ratings and demonstrates various techniques for improving rating prediction accuracy in collaborative filtering systems.
 
